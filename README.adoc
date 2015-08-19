@@ -1,0 +1,136 @@
+= DBee
+
+Inspired on MongoBee, DBee is a basic migration tool for databases. Tools like Liquibase
+and Flyway are way more extensive, but often too complicated for some projects.
+
+DBee provides all the functionality need to have schema migrations in your DB at a
+low enough level to enable you to do just about everything.
+
+== Example
+
+[source,java]
+----
+@ChangeLog
+public class SimpleChangelog {
+    @ChangeSet(author = "johndoe", order = 1)
+    public void changeOne(JdbcTemplate template) {
+        String query = "CREATE TABLE hello(world VARCHAR(200))";
+        template.execute(query);
+    }
+
+    @ChangeSet(author = "johndoe", order = 2)
+    public void changeTwo(JdbcTemplate template) {
+        String query = "INSERT INTO hello VALUES('hello there')";
+        template.execute(query);
+    }
+}
+----
+
+== Usage
+
+DBee is initialized with a datasource.
+
+[source,java]
+----
+DBee dBee = new DBee(dataSource);
+----
+
+You can then provide a list of classes that have an `@ChangeLog` annotation
+and/or a package that should be scanned for such classes.
+
+[source,java]
+----
+dBee.setChangeLogClasses(Arrays.asList(SimpleChangelog.class));
+dBee.setChangeLogsScanPackage("be.insaneprogramming.dbee.changelog);
+----
+
+The framework will automatically filter out any duplicates.
+
+After this, you can execute DBee to perform the migrations.
+
+[source,java]
+----
+dBee.execute();
+----
+
+DBee has a system to remember which changesets already have been executed by storing
+which methods of which changelog classes have been executed yet and storing it in a
+table in the database (`dbeechangelog`).
+
+=== @ChangeLog
+
+The `@ChangeLog` annotation has to be put on every class that contains changelogs.
+
+The annotation also provides an order argument, which can be used to order different
+changelog classes. It will sort these classes alphabetically with this order, or use
+the canonical name of the class if it's not present.
+
+=== @ChangeSet
+
+The `@ChangeSet` annotation has to be put on every method that is a changeset.
+
+`@ChangeSet` annotated method can support various parameters. By default, there are
+3 types of parameters supported: none, a JdbcTemplate or a DataSource parameters. You
+can extend DBee to have support for other parameters as well.
+
+The annotation requires you to enter an author and an order. The order is a numeric
+value and is used to sort individual changesets within a changelog. The author is
+stored when executing the changeset.
+
+== Support for other changeset parameters
+
+If you want to support more types of parameters in changeset methods, you can
+extend DBee and implement a ChangeSetMethodHandler. After that, you register this
+class by calling `addChangeSetMethodHandler' on your DBee instance.
+
+For example, to support the `Sql` class in Groovy, you can write a handler like this.
+
+[source,groovy]
+----
+public class GroovySqlChangeSetMethodHandler implements ChangeSetMethodHandler {
+
+    @Override
+    public Object invoke(Method changeSetMethod, Object changeLogInstance, DataSource db)
+            throws InvocationTargetException, IllegalAccessException {
+        return changeSetMethod.invoke(changeLogInstance, new Sql(db));
+    }
+
+    @Override
+    public boolean canHandle(Method changeSetMethod) {
+        return changeSetMethod.parameterTypes.length == 1 && changeSetMethod.parameterTypes[0].equals(Sql.class);
+    }
+}
+----
+
+And register it with your DBee instance.
+
+[source,java]
+----
+dBee.addChangeSetMethodHandler(GroovySqlChangeSetMethodHandler.class);
+----
+
+You can then write changesets like this in Groovy.
+
+[source,java]
+----
+@ChangeLog
+class GroovyChangelog {
+    @ChangeSet(author = "johndoe", order = 1)
+    def changeLog(Sql sql) {
+        sql.execute 'CREATE TABLE hello(world VARCHAR(200))'
+    }
+}
+----
+
+== Limitations
+
+- If you change the name of the class or the name of the method, DBee will consider
+the changed changesets and changelog as new ones and execute them again.
+- You cannot automatically rollback a changeset. Every rollback should be implemented
+as a separate changeset.
+- You cannot generate the SQL that would be executed against a database. However, you
+could emulate this behavior by having DBee act transactionally, route all calls
+through a spying JDBC driver and rollback the transaction after. That way you can
+still look at the calls that were spied.
+
+
